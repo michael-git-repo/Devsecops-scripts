@@ -1,0 +1,565 @@
+============================================================
+PROMETHEUS + GRAFANA + NODE EXPORTER MONITORING SETUP
+============================================================
+
+ARCHITECTURE
+
+EKS EC2
+Node Exporter :9100
+      |
+      | Metrics
+      v
+Monitoring EC2
+├── Node Exporter :9100
+├── Prometheus    :9090
+└── Grafana       :3000
+
+
+============================================================
+1. AWS SECURITY GROUPS
+============================================================
+
+EKS EC2:
+
+Allow TCP port 9100 from the Monitoring EC2 Security Group.
+
+Port: 9100
+Protocol: TCP
+Source: Monitoring EC2 Security Group
+
+# This allows Prometheus to collect Node Exporter metrics
+# without exposing port 9100 to the whole internet.
+
+
+Monitoring EC2:
+
+Allow:
+
+22    -> Your IP      # SSH
+3000  -> Your IP      # Grafana
+9090  -> Your IP      # Prometheus
+
+# Port 9100 does not need to be publicly accessible on this
+# machine because Prometheus and Node Exporter are on the same EC2.
+
+
+============================================================
+2. INSTALL NODE EXPORTER ON EKS EC2
+============================================================
+
+# Update Ubuntu packages
+sudo apt update
+
+
+# Install Node Exporter
+sudo apt install prometheus-node-exporter -y
+
+
+# Enable Node Exporter and start it
+sudo systemctl enable --now prometheus-node-exporter
+
+
+# Check Node Exporter service
+sudo systemctl status prometheus-node-exporter
+
+
+# Confirm port 9100 is listening
+sudo ss -lntp | grep 9100
+
+
+# Test Node Exporter locally
+curl http://localhost:9100/metrics
+
+
+# You should see lots of metrics beginning with:
+# HELP
+# TYPE
+# node_cpu
+# node_memory
+# node_disk
+# etc.
+
+
+============================================================
+3. INSTALL NODE EXPORTER ON MONITORING EC2
+============================================================
+
+# Update Ubuntu packages
+sudo apt update
+
+
+# Install Node Exporter
+sudo apt install prometheus-node-exporter -y
+
+
+# Enable and start Node Exporter
+sudo systemctl enable --now prometheus-node-exporter
+
+
+# Check service
+sudo systemctl status prometheus-node-exporter
+
+
+# Check port 9100
+sudo ss -lntp | grep 9100
+
+
+# Test metrics
+curl http://localhost:9100/metrics
+
+
+============================================================
+4. TEST EKS EC2 FROM MONITORING EC2
+============================================================
+
+# Your EKS EC2 private IP in this setup:
+# 172.31.26.64
+
+# Run this FROM the Monitoring EC2
+curl http://172.31.26.64:9100/metrics
+
+
+# If lots of node_ metrics appear, the Monitoring EC2
+# can successfully communicate with the EKS EC2.
+
+
+============================================================
+5. INSTALL PROMETHEUS ON MONITORING EC2
+============================================================
+
+# Update Ubuntu
+sudo apt update
+
+
+# Install Prometheus
+sudo apt install prometheus -y
+
+
+# Enable Prometheus and start it
+sudo systemctl enable --now prometheus
+
+
+# Check Prometheus
+sudo systemctl status prometheus
+
+
+# Confirm Prometheus is listening on port 9090
+sudo ss -lntp | grep 9090
+
+
+============================================================
+6. CONFIGURE PROMETHEUS
+============================================================
+
+# Open the Prometheus configuration file
+sudo nano /etc/prometheus/prometheus.yml
+
+
+# Add/configure the following:
+
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+
+  # Prometheus monitors itself
+  - job_name: "prometheus"
+    static_configs:
+      - targets:
+          - "localhost:9090"
+
+  # Monitor the Monitoring EC2 server
+  - job_name: "monitoring-server"
+    static_configs:
+      - targets:
+          - "localhost:9100"
+
+  # Monitor the EKS EC2 server
+  - job_name: "eks-server"
+    static_configs:
+      - targets:
+          - "172.31.26.64:9100"
+
+
+# Save Nano:
+# CTRL + O
+# Enter
+# CTRL + X
+
+
+============================================================
+7. VALIDATE PROMETHEUS CONFIGURATION
+============================================================
+
+# Check prometheus.yml for errors
+promtool check config /etc/prometheus/prometheus.yml
+
+
+# Expected result:
+# SUCCESS
+
+
+# Restart Prometheus to load the new configuration
+sudo systemctl restart prometheus
+
+
+# Check that Prometheus restarted successfully
+sudo systemctl status prometheus
+
+
+============================================================
+8. CHECK PROMETHEUS TARGETS
+============================================================
+
+# Open Prometheus in your browser:
+
+http://MONITORING-EC2-PUBLIC-IP:9090
+
+
+# Go to:
+
+Status
+  |
+  v
+Target health
+
+
+# You should see:
+
+prometheus           UP
+monitoring-server    UP
+eks-server           UP
+
+
+# If eks-server is DOWN, run this from Monitoring EC2:
+
+curl http://172.31.26.64:9100/metrics
+
+
+============================================================
+9. INSTALL GRAFANA ON MONITORING EC2
+============================================================
+
+# Install required packages
+sudo apt-get install -y apt-transport-https wget gnupg
+
+
+# Create directory for repository signing keys
+sudo mkdir -p /etc/apt/keyrings
+
+
+# Download Grafana signing key
+sudo wget -O /etc/apt/keyrings/grafana.asc \
+https://apt.grafana.com/gpg-full.key
+
+
+# Give APT permission to read the key
+sudo chmod 644 /etc/apt/keyrings/grafana.asc
+
+
+# Add the Grafana repository
+echo "deb [signed-by=/etc/apt/keyrings/grafana.asc] https://apt.grafana.com stable main" | sudo tee /etc/apt/sources.list.d/grafana.list
+
+
+# Update packages
+sudo apt-get update
+
+
+# Install Grafana
+sudo apt-get install -y grafana
+
+
+============================================================
+10. START GRAFANA
+============================================================
+
+# Enable Grafana and start it
+sudo systemctl enable --now grafana-server
+
+
+# Check Grafana
+sudo systemctl status grafana-server
+
+
+# Confirm Grafana is listening on port 3000
+sudo ss -lntp | grep 3000
+
+
+# Test Grafana locally
+curl -I http://localhost:3000
+
+
+============================================================
+11. OPEN GRAFANA
+============================================================
+
+# Open this in your browser:
+
+http://MONITORING-EC2-PUBLIC-IP:3000
+
+
+# Initial login:
+
+Username: admin
+Password: admin
+
+
+# Grafana may ask you to change the password.
+
+
+============================================================
+12. CONNECT GRAFANA TO PROMETHEUS
+============================================================
+
+Inside Grafana go to:
+
+Connections
+   |
+   v
+Data sources
+   |
+   v
+Add data source
+   |
+   v
+Prometheus
+
+
+# Enter the Prometheus URL:
+
+http://localhost:9090
+
+
+# We use localhost because Prometheus and Grafana
+# are running on the same Monitoring EC2.
+
+
+# Click:
+
+Save & test
+
+
+# You should receive a successful connection message.
+
+
+============================================================
+13. IMPORT NODE EXPORTER DASHBOARD
+============================================================
+
+Inside Grafana go to:
+
+Dashboards
+   |
+   v
+New
+   |
+   v
+Import
+
+
+# Enter dashboard ID:
+
+1860
+
+
+# Click Load.
+
+
+# Select:
+
+Prometheus
+
+
+# Click:
+
+Import
+
+
+============================================================
+14. CHECK YOUR SERVERS IN GRAFANA
+============================================================
+
+At the top of the Node Exporter Full dashboard,
+use the Job dropdown.
+
+
+# EKS EC2:
+
+Job:
+eks-server
+
+Instance:
+172.31.26.64:9100
+
+
+# Monitoring EC2:
+
+Job:
+monitoring-server
+
+Instance:
+localhost:9100
+
+
+# You should now see metrics such as:
+
+CPU Usage
+RAM Usage
+Disk Usage
+Network Traffic
+System Load
+Disk I/O
+Uptime
+Processes
+
+
+============================================================
+15. USEFUL SERVICE COMMANDS
+============================================================
+
+# Check Node Exporter
+sudo systemctl status prometheus-node-exporter
+
+
+# Check Prometheus
+sudo systemctl status prometheus
+
+
+# Check Grafana
+sudo systemctl status grafana-server
+
+
+============================================================
+16. RESTART SERVICES
+============================================================
+
+# Restart Node Exporter
+sudo systemctl restart prometheus-node-exporter
+
+
+# Restart Prometheus
+sudo systemctl restart prometheus
+
+
+# Restart Grafana
+sudo systemctl restart grafana-server
+
+
+============================================================
+17. CHECK ALL PORTS
+============================================================
+
+# Check Grafana, Prometheus and Node Exporter ports
+sudo ss -lntp | grep -E '3000|9090|9100'
+
+
+# Expected:
+
+3000 = Grafana
+9090 = Prometheus
+9100 = Node Exporter
+
+
+============================================================
+18. TEST NODE EXPORTER
+============================================================
+
+# Test Node Exporter on Monitoring EC2
+curl http://localhost:9100/metrics
+
+
+# Test Node Exporter on EKS EC2 from Monitoring EC2
+curl http://172.31.26.64:9100/metrics
+
+
+============================================================
+19. CHECK PROMETHEUS CONFIG
+============================================================
+
+# Validate Prometheus configuration
+promtool check config /etc/prometheus/prometheus.yml
+
+
+# If successful, restart Prometheus
+sudo systemctl restart prometheus
+
+
+============================================================
+20. VIEW SERVICE LOGS IF SOMETHING FAILS
+============================================================
+
+# Node Exporter logs
+sudo journalctl -u prometheus-node-exporter -f
+
+
+# Prometheus logs
+sudo journalctl -u prometheus -f
+
+
+# Grafana logs
+sudo journalctl -u grafana-server -f
+
+
+# CTRL + C exits the live log.
+
+
+============================================================
+FINAL MONITORING FLOW
+============================================================
+
+
+EKS EC2
+172.31.26.64
+      |
+      |
+Node Exporter
+Port 9100
+      |
+      | Metrics
+      |
+      v
+
+MONITORING EC2
+      |
+      |---- Node Exporter :9100
+      |
+      |---- Prometheus :9090
+      |          |
+      |          | Collects metrics
+      |          v
+      |
+      |---- Grafana :3000
+                 |
+                 | Reads Prometheus
+                 v
+
+        NODE EXPORTER FULL
+           DASHBOARD
+                 |
+                 v
+
+CPU | RAM | DISK | NETWORK | LOAD | UPTIME
+
+
+============================================================
+PORT SUMMARY
+============================================================
+
+Grafana
+Port 3000
+Used for dashboards
+
+
+Prometheus
+Port 9090
+Used for collecting/querying metrics
+
+
+Node Exporter
+Port 9100
+Used for exposing Linux server metrics
+
+
+============================================================
+END
+============================================================
